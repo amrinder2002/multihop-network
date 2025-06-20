@@ -1,140 +1,139 @@
+"""Simple threaded chat server used for the multi-hop network demo."""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import random
 import socket
 import threading
-import random
-# import wikipedia
+from dataclasses import dataclass
+from typing import Dict, Tuple
 
-IP = socket.gethostbyname(socket.gethostname())
-# IP = "172.20.10.3"
-PORT = 5566
-# PORT = ""
-ADDR = (IP, PORT)
-SIZE = 1024
+
 FORMAT = "utf-8"
+SIZE = 1024
 DISCONNECT_MSG = "!DISCONNECT"
 FORWARD_MSG = "!ADDRESS"
 LIST_MSG = "!LIST"
-v_name = []
-v_addr = []
-v_conn = []
-v_pin = []
-v_port = []
-
-print(f"IP = {IP}\n")
-
-print("[STARTING] Server is starting...")
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind(ADDR)
-server.listen()
-print(f"[LISTENING] Server is listening on {IP}:{PORT}")
-
-def broadcast():
-    i = 0
-    for addr in v_conn:
-        msg = str(v_name)
-        msg = "[LIST] CONNECTION LIST: " + msg
-        addr.send(msg.encode(FORMAT))
-        msg = str(v_port)
-        msg = "[LIST] CONNECTION LIST: " + msg
-        addr.send(msg.encode(FORMAT))
-        i = i+1
-    pass
 
 
-def handle_client(conn, addr, u_name):
-    print(f"[SERVER] [NEW CONNECTION] {u_name}:{addr} connected.")
+@dataclass
+class ClientInfo:
+    name: str
+    address: Tuple[str, int]
+    connection: socket.socket
+    pin: str
+    port: int
 
-    connected = True
-    while connected:
-        msg = conn.recv(SIZE).decode(FORMAT)
-        if msg == DISCONNECT_MSG:
-            print(f"[SERVER][ACTIVE CONNECTIONS] {threading.active_count() - 2}")
-            conn.send(DISCONNECT_MSG.encode(FORMAT))
-            conn.close()
-            connected = False
-        if msg == FORWARD_MSG:
-            conn.send("!USERNAME".encode(FORMAT))
+
+class ChatServer:
+    """Threaded chat server."""
+
+    def __init__(self, host: str, port: int) -> None:
+        self.host = host
+        self.port = port
+        self.addr = (host, port)
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server.bind(self.addr)
+        self.server.listen()
+        self.clients: Dict[str, ClientInfo] = {}
+        logging.info("Server listening on %s:%s", host, port)
+
+    def broadcast(self) -> None:
+        """Send the list of connected clients to everyone."""
+        names = list(self.clients.keys())
+        ports = [info.port for info in self.clients.values()]
+        for info in self.clients.values():
+            info.connection.send(f"[LIST] CONNECTION LIST: {names}".encode(FORMAT))
+            info.connection.send(
+                f"[LIST] CONNECTION LIST: {ports}".encode(FORMAT)
+            )
+
+    def handle_client(self, conn: socket.socket, addr: Tuple[str, int], name: str) -> None:
+        """Handle messages from a connected client."""
+        logging.info("New connection %s:%s as %s", addr[0], addr[1], name)
+        connected = True
+        while connected:
             msg = conn.recv(SIZE).decode(FORMAT)
-            i=0
-            for name in v_name:
-                print(f"{i} ")
-                if msg == name:
-                    break
-                i+=1
-            print(f"{i} ")
-            
-            t = v_addr[i]
-            t_ip = str(t[0])
-            t_port = str(v_port[i])
-
-            conn.send(t_ip.encode(FORMAT))
-            conn.send(t_port.encode(FORMAT))
-            continue
-
-
-        if msg == LIST_MSG:
-            msg = f"Msg received: {msg}"
-            msg = str(v_name)
-            conn.send(msg.encode(FORMAT))
-            continue
-
-
-        print(f"[{u_name}:{addr}] {msg}")
-        msg = f"Msg received: {msg}"
-        # msg = wikipedia.summary(msg, sentences=1)
-        conn.send(msg.encode(FORMAT))
-
-    conn.close()
-
-
-def main():
-    temp_port = PORT+1
-    while True:
-        conn, addr = server.accept()
-        while True:
-            temp_name = conn.recv(SIZE).decode(FORMAT)
-            print(f"[CLIENT] Username: {temp_name}")
-            if temp_name in v_name:
-                print("[SERVER] Username not accepted")
-                conn.send("!NOTACCEPTED".encode(FORMAT))
-            else:
-                print("[SERVER] Username accepted")
-                conn.send(temp_name.encode(FORMAT))
+            if msg == DISCONNECT_MSG:
+                logging.info("%s disconnected", name)
+                conn.send(DISCONNECT_MSG.encode(FORMAT))
+                conn.close()
+                connected = False
                 break
-        
-        temp_pin = str(random.randint(1000, 9999))
-        print(f"[AUTHENTICATING] Current Pin: {temp_pin}")
-        msg_pin = conn.recv(SIZE).decode(FORMAT)
-        
-        if msg_pin != temp_pin:
-            print("[SERVER] PIN not accepted")
-            conn.send("!NOTACCEPTED".encode(FORMAT))
-            conn.close()
-            break
-        else:
-            print("[SERVER] PIN accepted")
+
+            if msg == FORWARD_MSG:
+                conn.send("!USERNAME".encode(FORMAT))
+                target = conn.recv(SIZE).decode(FORMAT)
+                if target in self.clients:
+                    t_info = self.clients[target]
+                    conn.send(t_info.address[0].encode(FORMAT))
+                    conn.send(str(t_info.port).encode(FORMAT))
+                continue
+
+            if msg == LIST_MSG:
+                conn.send(str(list(self.clients.keys())).encode(FORMAT))
+                continue
+
+            logging.info("[%s:%s] %s", name, addr, msg)
+            conn.send(f"Msg received: {msg}".encode(FORMAT))
+
+    def run(self) -> None:
+        """Run the server loop accepting clients."""
+        temp_port = self.port + 1
+        while True:
+            conn, addr = self.server.accept()
+
+            # username negotiation
+            while True:
+                temp_name = conn.recv(SIZE).decode(FORMAT)
+                if temp_name in self.clients:
+                    conn.send("!NOTACCEPTED".encode(FORMAT))
+                else:
+                    conn.send(temp_name.encode(FORMAT))
+                    break
+
+            temp_pin = str(random.randint(1000, 9999))
+            logging.info("Authenticating %s with pin %s", temp_name, temp_pin)
+            msg_pin = conn.recv(SIZE).decode(FORMAT)
+            if msg_pin != temp_pin:
+                conn.send("!NOTACCEPTED".encode(FORMAT))
+                conn.close()
+                continue
+
             conn.send("!ACCEPTED".encode(FORMAT))
-        
-        
-        conn.recv(SIZE).decode(FORMAT)
-        conn.send(str(temp_port).encode(FORMAT))
-        
-        
-        
+            conn.recv(SIZE)
+            conn.send(str(temp_port).encode(FORMAT))
 
-        print(f"[SERVER] {temp_name} added to network")
+            info = ClientInfo(
+                name=temp_name,
+                address=addr,
+                connection=conn,
+                pin=temp_pin,
+                port=temp_port,
+            )
+            self.clients[temp_name] = info
+            temp_port += 1
+            threading.Thread(
+                target=self.handle_client, args=(conn, addr, temp_name), daemon=True
+            ).start()
+            self.broadcast()
+            logging.info("Active connections: %s", len(self.clients))
 
-        thread = threading.Thread(target=handle_client, args=(conn, addr, temp_name))
-        thread.start()
-        v_pin.append(temp_pin)
-        v_name.append(temp_name)
-        v_addr.append(addr)
-        v_conn.append(conn)
-        v_port.append(temp_port)
-        temp_port += 1
-        broadcast()
-        print(f"\n[SERVER][ACTIVE CONNECTIONS] {threading.active_count() - 1}")
-        pass
-    pass
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Chat server")
+    parser.add_argument("--host", default=socket.gethostbyname(socket.gethostname()))
+    parser.add_argument("--port", type=int, default=5566)
+    return parser.parse_args()
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+    args = parse_args()
+    server = ChatServer(args.host, args.port)
+    server.run()
 
 
 if __name__ == "__main__":
