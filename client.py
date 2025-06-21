@@ -3,9 +3,11 @@ import threading
 import time
 
 c_obj = threading.Condition()
-IP = socket.gethostbyname(socket.gethostname())
+LOCAL_IP = socket.gethostbyname(socket.gethostname())
+SERVER_IP = None
 PORT = 5566
-ADDR = (IP, PORT)
+DISCOVERY_PORT = 5570
+ADDR = None
 SIZE = 1024
 FORMAT = "utf-8"
 KEYWORDS = ['!NOTACCEPTED', '!DISCONNECT', '!ACCEPTED', '!LIST', '!ADDRESS']
@@ -15,14 +17,50 @@ PIN = None
 client = None
 s_client = None
 S_PORT = None
+reconnect_lock = threading.Lock()
+
+
+def discover_server():
+    """Listen for server broadcast and return its address."""
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    udp.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    udp.bind(("", DISCOVERY_PORT))
+    while True:
+        data, _ = udp.recvfrom(SIZE)
+        msg = data.decode(FORMAT)
+        if msg.startswith("SERVE:"):
+            _, ip, port = msg.split(":")
+            return ip, int(port)
+
+
+def connect_server():
+    """Discover and connect to the server with retries."""
+    global SERVER_IP, ADDR, client
+    with reconnect_lock:
+        while True:
+            SERVER_IP, p = discover_server()
+            ADDR = (SERVER_IP, p)
+            print(f"[CONNECTING] Client connecting to server at {SERVER_IP}:{p}")
+            try:
+                client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client.connect(ADDR)
+                print(f"[CONNECTED] Client connected to server at {SERVER_IP}:{p}")
+                return
+            except Exception:
+                print("[RETRY] Connection failed. Searching again...")
+                time.sleep(2)
 
 
 def send_message():
     # c_obj.acquire()
     while True:
         msg = input("")
-
-        globals()['client'].send(msg.encode(FORMAT))
+        try:
+            globals()['client'].send(msg.encode(FORMAT))
+        except Exception:
+            print("[ERROR] Lost connection. Reconnecting...")
+            connect_server()
+            continue
         if msg == "!disconnect":
             exit()
         if msg == "!ADDRESS":
@@ -38,7 +76,14 @@ def send_message():
 def recieve_messsage():
     # c_obj.acquire()
     while True:
-        msg = globals()['client'].recv(SIZE).decode(FORMAT)
+        try:
+            msg = globals()['client'].recv(SIZE).decode(FORMAT)
+            if not msg:
+                raise ConnectionError
+        except Exception:
+            print("[ERROR] Connection lost. Reconnecting...")
+            connect_server()
+            continue
         if msg == "!disconnect":
             exit()
         if msg == "!USERNAME":
@@ -63,12 +108,12 @@ def recieve_messsage():
 
 
 def run_s_client():
-    ADDR2 = (IP, S_PORT)
+    ADDR2 = (LOCAL_IP, S_PORT)
     print("[S_CLIENT] SEVER_CLIENT is starting...")
     s_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s_client.bind(ADDR2)
     s_client.listen()
-    print(f"[S_CLIENT] S_CLIENT is listening on {IP}:{S_PORT}")
+    print(f"[S_CLIENT] S_CLIENT is listening on {LOCAL_IP}:{S_PORT}")
 
     while True:
         conn, addr = s_client.accept()
@@ -82,11 +127,9 @@ def run_s_client():
 
 def main():
 
+    connect_server()
+
     while True:
-        print(f"[CONNECTING] Client connecting to server at {IP}:{PORT}")
-        globals()['client'] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        globals()['client'].connect(ADDR)
-        print(f"[CONNECTED] Client connected to server at {IP}:{PORT}")
 
     # [TAB] for inputting, sending and verifyin username
         if globals()['USERNAME'] == None or globals()['USERNAME'] == "!NOTACCEPTED":
@@ -115,9 +158,9 @@ def main():
             break
 
         print(
-            f"[AUTHENTICATED] credentials are verified by server at {IP}:{PORT}")
+            f"[AUTHENTICATED] credentials are verified by server at {SERVER_IP}:{PORT}")
 
-        print(f"[Waiting] Waiting for port number from {IP}:{PORT}")
+        print(f"[Waiting] Waiting for port number from {SERVER_IP}:{PORT}")
         globals()['client'].send("PORT".encode(FORMAT))
         temp_msg = globals()['client'].recv(SIZE).decode(FORMAT)
         globals()['S_PORT'] = int(temp_msg)
