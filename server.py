@@ -10,6 +10,10 @@ import threading
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
+DISCOVERY_PORT = 5577
+DISCOVERY_MSG = "DISCOVER_SERVER"
+DISCOVERY_RESP = "SERVER_INFO"
+
 
 FORMAT = "utf-8"
 SIZE = 1024
@@ -30,15 +34,34 @@ class ClientInfo:
 class ChatServer:
     """Threaded chat server."""
 
-    def __init__(self, host: str, port: int) -> None:
+    def __init__(self, host: str, port: int, disc_port: int = DISCOVERY_PORT) -> None:
         self.host = host
         self.port = port
+        self.disc_port = disc_port
         self.addr = (host, port)
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind(self.addr)
         self.server.listen()
+        # discovery socket for clients to auto-detect the server
+        self.disc_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.disc_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.disc_socket.bind(("", self.disc_port))
+        threading.Thread(target=self._discovery_loop, daemon=True).start()
         self.clients: Dict[str, ClientInfo] = {}
         logging.info("Server listening on %s:%s", host, port)
+
+    def _discovery_loop(self) -> None:
+        """Respond to UDP discovery requests."""
+        while True:
+            try:
+                msg, addr = self.disc_socket.recvfrom(SIZE)
+            except OSError:
+                break
+            if msg.decode(FORMAT) == DISCOVERY_MSG:
+                response = f"{DISCOVERY_RESP} {self.host} {self.port}".encode(
+                    FORMAT
+                )
+                self.disc_socket.sendto(response, addr)
 
     def broadcast(self) -> None:
         """Send the list of connected clients to everyone."""
@@ -126,13 +149,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Chat server")
     parser.add_argument("--host", default=socket.gethostbyname(socket.gethostname()))
     parser.add_argument("--port", type=int, default=5566)
+    parser.add_argument("--disc-port", type=int, default=DISCOVERY_PORT, help="UDP discovery port")
     return parser.parse_args()
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
     args = parse_args()
-    server = ChatServer(args.host, args.port)
+    server = ChatServer(args.host, args.port, args.disc_port)
     server.run()
 
 
