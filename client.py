@@ -1,140 +1,87 @@
+"""Command line chat client for the multi-hop network demo."""
+
+from __future__ import annotations
+
+import argparse
+import logging
 import socket
 import threading
-import time
+from typing import Tuple
 
-c_obj = threading.Condition()
-IP = socket.gethostbyname(socket.gethostname())
-PORT = 5566
-ADDR = (IP, PORT)
-SIZE = 1024
 FORMAT = "utf-8"
-KEYWORDS = ['!NOTACCEPTED', '!DISCONNECT', '!ACCEPTED', '!LIST', '!ADDRESS']
+SIZE = 1024
 DISCONNECT_MSG = "!DISCONNECT"
-USERNAME = None
-PIN = None
-client = None
-s_client = None
-S_PORT = None
+FORWARD_MSG = "!ADDRESS"
+LIST_MSG = "!LIST"
 
 
-def send_message():
-    # c_obj.acquire()
-    while True:
-        msg = input("")
+class ChatClient:
+    def __init__(self, host: str, port: int) -> None:
+        self.addr = (host, port)
+        self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.username: str | None = None
+        self.s_port: int | None = None
 
-        globals()['client'].send(msg.encode(FORMAT))
-        if msg == "!disconnect":
-            exit()
-        if msg == "!ADDRESS":
-            time.sleep(1)
-        #    c_obj.wait
-        pass
-        if msg == "!DISCONNECT":
-            break
-        pass
-    # c_obj.release()
+    def connect(self) -> None:
+        self.client.connect(self.addr)
+        logging.info("Connected to server at %s:%s", *self.addr)
 
+    def authenticate(self, username: str, pin: str) -> None:
+        self.client.send(username.encode(FORMAT))
+        resp = self.client.recv(SIZE).decode(FORMAT)
+        if resp != username:
+            raise ValueError("Username not accepted")
 
-def recieve_messsage():
-    # c_obj.acquire()
-    while True:
-        msg = globals()['client'].recv(SIZE).decode(FORMAT)
-        if msg == "!disconnect":
-            exit()
-        if msg == "!USERNAME":
-            msg = input("[SERVER] To?: ")
-            globals()['client'].send(msg.encode(FORMAT))
-            t_ip = globals()['client'].recv(SIZE).decode(FORMAT)
-            t_port = int(globals()['client'].recv(SIZE).decode(FORMAT))
-            print(
-                f"[CLIENT] t_ip: {t_ip} and t_port: {t_port}\n[CLIENT] 'PRESS ENTER'")
-            T_ADDR = (t_ip, int(t_port))
-            t_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            t_client.connect(T_ADDR)
-            msg = input("INPUT INTERUPT MSG:> ")
-            t_client.send(msg.encode(FORMAT))
-            msg = t_client.recv(SIZE).decode(FORMAT)
-            print("[INTERUPTED NODE] {msg}")
-            # c_obj.notify()
-            pass
-        print(f"[SERVER] {msg}")
-        pass
-    # c_obj.release()
+        self.client.send(pin.encode(FORMAT))
+        resp = self.client.recv(SIZE).decode(FORMAT)
+        if resp != "!ACCEPTED":
+            raise ValueError("PIN not accepted")
 
+        self.client.send("PORT".encode(FORMAT))
+        self.s_port = int(self.client.recv(SIZE).decode(FORMAT))
+        self.username = username
+        logging.info("Authenticated. Assigned port %s", self.s_port)
 
-def run_s_client():
-    ADDR2 = (IP, S_PORT)
-    print("[S_CLIENT] SEVER_CLIENT is starting...")
-    s_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s_client.bind(ADDR2)
-    s_client.listen()
-    print(f"[S_CLIENT] S_CLIENT is listening on {IP}:{S_PORT}")
+    def send_loop(self) -> None:
+        while True:
+            msg = input()
+            self.client.send(msg.encode(FORMAT))
+            if msg == DISCONNECT_MSG:
+                break
 
-    while True:
-        conn, addr = s_client.accept()
-        temp_msg = conn.recv(SIZE).decode(FORMAT)
-        print(f"[INTERUP CLIENT] {temp_msg}")
-        conn.send("Msg Recieved".encode(FORMAT))
-        conn.close()
+    def recv_loop(self) -> None:
+        while True:
+            msg = self.client.recv(SIZE).decode(FORMAT)
+            print(f"[SERVER] {msg}")
+            if msg == DISCONNECT_MSG:
+                break
 
-    pass
+    def run(self, username: str, pin: str) -> None:
+        self.connect()
+        self.authenticate(username, pin)
+
+        recv_thread = threading.Thread(target=self.recv_loop, daemon=True)
+        recv_thread.start()
+        self.send_loop()
 
 
-def main():
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Chat client")
+    parser.add_argument("--host", default=socket.gethostbyname(socket.gethostname()))
+    parser.add_argument("--port", type=int, default=5566)
+    parser.add_argument("username", help="Username to use")
+    parser.add_argument("pin", help="Authentication PIN")
+    return parser.parse_args()
 
-    while True:
-        print(f"[CONNECTING] Client connecting to server at {IP}:{PORT}")
-        globals()['client'] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        globals()['client'].connect(ADDR)
-        print(f"[CONNECTED] Client connected to server at {IP}:{PORT}")
 
-    # [TAB] for inputting, sending and verifyin username
-        if globals()['USERNAME'] == None or globals()['USERNAME'] == "!NOTACCEPTED":
-            while True:
-                globals()['USERNAME'] = input("[LOGIN] INPUT USERNAME: ")
-
-                if globals()['USERNAME'] in KEYWORDS:
-                    print("[KEYWORD ERROR] This name is reserved")
-                    continue
-                globals()['client'].send(globals()['USERNAME'].encode(FORMAT))
-                temp_msg = globals()['client'].recv(SIZE).decode(FORMAT)
-                if (temp_msg == globals()['USERNAME']):
-                    print(f"[SERVER] Username accepted")
-                    break
-                else:
-                    print("[NAME ERROR] Try another username")
-                    continue
-
-        if globals()['PIN'] == None:
-            globals()['PIN'] = input("[LOGIN] Input PIN: ")
-        globals()['client'].send(globals()['PIN'].encode(FORMAT))
-
-        temp_msg = globals()['client'].recv(SIZE).decode(FORMAT)
-        print(f"[SERVER] {temp_msg}")
-        if temp_msg == "!NOTACCEPTED":
-            break
-
-        print(
-            f"[AUTHENTICATED] credentials are verified by server at {IP}:{PORT}")
-
-        print(f"[Waiting] Waiting for port number from {IP}:{PORT}")
-        globals()['client'].send("PORT".encode(FORMAT))
-        temp_msg = globals()['client'].recv(SIZE).decode(FORMAT)
-        globals()['S_PORT'] = int(temp_msg)
-        print(f"[SERVER] Your port number is {globals()['S_PORT']}")
-        # input("end")
-        break
-
-    thread_recv = threading.Thread(target=recieve_messsage, args=())
-    thread_recv.start()
-    time.sleep(0.1)
-    thread_s_client = threading.Thread(target=run_s_client, args=())
-    thread_s_client.start()
-    time.sleep(0.1)
-    thread_send = threading.Thread(target=send_message, args=())
-    thread_send.start()
-
-    pass
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+    args = parse_args()
+    client = ChatClient(args.host, args.port)
+    try:
+        client.run(args.username, args.pin)
+    except Exception as exc:
+        logging.error("Error: %s", exc)
 
 
 if __name__ == "__main__":
