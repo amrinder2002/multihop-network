@@ -1,6 +1,7 @@
 import socket
 import threading
 import random
+import time
 # import wikipedia
 
 IP = socket.gethostbyname(socket.gethostname())
@@ -10,6 +11,7 @@ PORT = 5566
 ADDR = (IP, PORT)
 SIZE = 1024
 FORMAT = "utf-8"
+DISCOVERY_PORT = 5570
 DISCONNECT_MSG = "!DISCONNECT"
 FORWARD_MSG = "!ADDRESS"
 LIST_MSG = "!LIST"
@@ -26,6 +28,19 @@ server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(ADDR)
 server.listen()
 print(f"[LISTENING] Server is listening on {IP}:{PORT}")
+
+
+def discovery_broadcast():
+    """Broadcast server address for automatic discovery."""
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    udp.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    msg = f"SERVE:{IP}:{PORT}".encode(FORMAT)
+    while True:
+        try:
+            udp.sendto(msg, ("<broadcast>", DISCOVERY_PORT))
+        except Exception:
+            pass
+        time.sleep(5)
 
 def broadcast():
     i = 0
@@ -88,6 +103,7 @@ def handle_client(conn, addr, u_name):
 
 def main():
     temp_port = PORT+1
+    threading.Thread(target=discovery_broadcast, daemon=True).start()
     while True:
         conn, addr = server.accept()
         while True:
